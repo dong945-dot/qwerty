@@ -29,35 +29,34 @@ def generate_assembly_assets(
         "plate_thickness": hole_depth,
     }
     
-    # mjfit 直接返回 XML 字符串
+    # 获取 mjfit 生成的原始 XML 字符串
     hole_mjcf_str = mjfit.build(hole_config, standalone=True)
     parsed_root = ET.fromstring(hole_mjcf_str)
-    
-    # 清理 mjfit 产生的、导致 robosuite 报错的 <default> 标签
-    for default_tag in parsed_root.findall(".//default"):
-        # 必须找到它的父节点才能 remove
-        for parent in parsed_root.iter():
-            if default_tag in parent:
-                parent.remove(default_tag)
 
-    # 构建一个符合 robosuite 规范的干净 XML 树
+    # 创建全新的、绝对符合 robosuite 规范的 XML 树
     hole_root = ET.Element("mujoco", model="hole")
-    # robosuite 的 MujocoXML 需要 <asset> 标签存在（即使为空）
     ET.SubElement(hole_root, "asset")
     worldbody = ET.SubElement(hole_root, "worldbody")
     outer_body = ET.SubElement(worldbody, "body")
     object_body = ET.SubElement(outer_body, "body", name="object")
 
-    # 提取 mjfit 生成的 geom 并注入参数
-    for geom in parsed_root.iter("geom"):
-        geom.set("solref", solref_str)
-        geom.set("solimp", solimp_str)
-        geom.set("friction", fric_str)
-        geom.set("condim", "4")
-        geom.set("group", "0") # 核心修复：必须指定 group
-        object_body.append(geom)
+    # 深度清洗：遍历 mjfit 里的所有 geom
+    for raw_geom in parsed_root.iter("geom"):
+        # 1. 如果带有 class 属性，直接删除（这是引发 KeyError 的根源）
+        if "class" in raw_geom.attrib:
+            del raw_geom.attrib["class"]
+            
+        # 2. 注入用户指定的物理参数
+        raw_geom.set("solref", solref_str)
+        raw_geom.set("solimp", solimp_str)
+        raw_geom.set("friction", fric_str)
+        raw_geom.set("condim", "4")
+        raw_geom.set("group", "0") # 强制指定 group，避免 int(None) 错误
         
-    # 核心修复：补全 robosuite 强制需要的三个基础 site
+        # 3. 将这个干净的 geom 节点挂载到我们新建的 object_body 上
+        object_body.append(raw_geom)
+        
+    # 补全 robosuite 强制需要的三个基础 site
     ET.SubElement(object_body, "site", name="bottom_site", pos=f"0 0 {-hole_depth/2.0}", size="0.001", rgba="0 0 0 0")
     ET.SubElement(object_body, "site", name="top_site", pos=f"0 0 {hole_depth/2.0}", size="0.001", rgba="0 0 0 0")
     ET.SubElement(object_body, "site", name="horizontal_radius_site", pos=f"{peg_radius+clearance} 0 0", size="0.001", rgba="0 0 0 0")
